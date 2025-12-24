@@ -1,0 +1,19 @@
+[project]
+name = "kitsu-publisher"
+version = "0.1.0"
+description = "A desktop application for publishing shots to Kitsu"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pywebview",
+    "gazu",
+    "requests",
+    "packaging",
+    "pillow",
+    "pyinstaller"
+]
+
+[tool.uv]
+dev-dependencies = []
