@@ -68,10 +68,10 @@
 <div class="min-h-screen bg-slate-950 font-sans text-slate-100 selection:bg-blue-500 selection:text-white">
 	<nav class="bg-slate-900/50 backdrop-blur-md border-b border-slate-800 px-6 py-4 sticky top-0 z-20">
 		<div class="max-w-7xl mx-auto flex justify-between items-center">
-			<div class="flex items-center gap-3 cursor-pointer" onclick={() => goto('/publish')}>
+			<button class="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onclick={() => goto('/publish')}>
 				<img src={logo} alt="Logo" class="w-8 h-8 object-contain drop-shadow-md" />
 				<h1 class="font-bold text-lg tracking-tight">Kitsu Publisher</h1>
-			</div>
+			</button>
 			<div class="flex items-center gap-4 text-sm">
 				<button onclick={() => goto('/publish')} class="text-slate-400 hover:text-white font-medium transition-colors">Back to Publish</button>
 			</div>

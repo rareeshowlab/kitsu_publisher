@@ -65,7 +65,6 @@ cd ..
 `uv` 환경 내에서 PyInstaller를 실행하여 빌드합니다.
 
 ```bash
-# backend 디렉토리로 이동하지 않고 루트에서 실행 가능 (단, PyInstaller 명령어는 backend에서 실행하는 것이 경로상 편리함)
 cd backend
 uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build:frontend/build" --clean desktop.py
 ```
