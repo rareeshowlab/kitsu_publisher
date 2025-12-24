@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from updater import Updater
+from config import ConfigManager
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,7 @@ logging.getLogger().addHandler(queue_handler)
 
 app = FastAPI()
 updater = Updater()
+config_manager = ConfigManager()
 
 # CORS 설정
 app.add_middleware(
@@ -116,7 +118,148 @@ class MatchResponse(BaseModel):
     match_status: str = "none"
     last_version: Optional[int] = None
 
-FILENAME_PATTERN = re.compile(r"^(?:(?P<episode>[^_]+)_)?(?P<sequence>[^_]+)_(?P<shot_num>[^_]+)_(?P<task>[^_]+)_v(?P<version>\d+)")
+class ConfigModel(BaseModel):
+    default_task_name: str
+    filename_pattern: str
+    sequence_name_template: str
+    shot_name_template: str
+
+@app.get("/system/config")
+def get_config():
+    return config_manager.config
+
+@app.post("/system/config")
+def update_config(config: ConfigModel):
+    config_manager.save_config(config.dict())
+    return {"status": "updated", "config": config_manager.config}
+
+@app.post("/system/preview-parse")
+def preview_parse(payload: Dict[str, Any]):
+    filename = payload.get("filename", "")
+    # 프리뷰를 위해 현재 설정을 오버라이드할 수 있음
+    override_pattern = payload.get("filename_pattern")
+    override_seq = payload.get("sequence_name_template")
+    override_shot = payload.get("shot_name_template")
+    
+    parsed = parse_filename(filename, override_pattern, override_seq, override_shot)
+    if parsed:
+        return {"success": True, "data": parsed}
+    else:
+        return {"success": False, "message": "Does not match the current pattern"}
+
+def parse_filename(filename: str, pattern_str: Optional[str] = None, seq_template: Optional[str] = None, shot_template: Optional[str] = None) -> Optional[dict]:
+    # 1. 설정에서 패턴 가져오기 (인자가 없으면 저장된 값 사용)
+    if not pattern_str:
+        pattern_str = config_manager.get("filename_pattern")
+    
+    if not pattern_str:
+        return None
+    
+    # 2. 패턴을 정규식으로 변환
+    # 지원 문법:
+    # {key} -> (?P<key>.+?)
+    # [ ... ] -> (?: ... )?  (Optional)
+    
+    regex_parts = []
+    i = 0
+    length = len(pattern_str)
+    
+    while i < length:
+        char = pattern_str[i]
+        
+        if char == '[':
+            # 옵셔널 시작
+            regex_parts.append("(?:")
+            i += 1
+        elif char == ']':
+            # 옵셔널 끝
+            regex_parts.append(")?")
+            i += 1
+        elif char == '{':
+            # 변수 시작, '}' 찾기
+            end_brace = pattern_str.find('}', i)
+            if end_brace != -1:
+                key = pattern_str[i+1:end_brace]
+                if key == "version":
+                    regex_parts.append(f"(?P<{key}>\\d+)")
+                else:
+                    regex_parts.append(f"(?P<{key}>.+?)")
+                i = end_brace + 1
+            else:
+                # 닫는 괄호 없으면 그냥 문자로 취급
+                regex_parts.append(re.escape(char))
+                i += 1
+        elif char == '*':
+            # 와일드카드 -> 모든 문자 매칭 (Non-greedy)
+            regex_parts.append(".*?")
+            i += 1
+        else:
+            # 일반 문자 -> 이스케이프
+            regex_parts.append(re.escape(char))
+            i += 1
+            
+    regex_pattern = "^" + "".join(regex_parts) + "$"
+    
+    logger.info(f"Generated Regex: {regex_pattern}")
+
+    # 확장자 제거 후 매칭
+    name_without_ext = os.path.splitext(filename)[0]
+    
+    try:
+        match = re.match(regex_pattern, name_without_ext)
+    except re.error as e:
+        logger.error(f"Invalid regex generated: {regex_pattern} - {e}")
+        return None
+
+    if not match:
+        logger.warning(f"No match for '{name_without_ext}' against pattern '{pattern_str}'")
+        return None
+    
+    data = match.groupdict()
+    
+    # 3. 데이터 정제
+    # 태스크 이름 매핑
+    task_map = {"comp": "Compositing", "ani": "Animation", "lit": "Lighting", "fx": "FX"}
+    task_raw = data.get("task", "").lower()
+    task_name = task_map.get(task_raw, task_raw.capitalize())
+    if not task_name:
+        task_name = config_manager.get("default_task_name")
+
+    # 템플릿 포맷팅을 위한 안전한 데이터 준비
+    # None 값을 빈 문자열로 변환하여 포맷팅 에러 방지
+    format_data = {k: (v if v is not None else "") for k, v in data.items()}
+    
+    # 4. 시퀀스 이름 조합 (sequence_name_template 사용)
+    if not seq_template:
+        seq_template = config_manager.get("sequence_name_template")
+        
+    try:
+        # 템플릿에 사용된 키가 데이터에 없으면 KeyError 발생
+        full_seq_name = seq_template.format(**format_data)
+        # 만약 에피소드가 없는데 {episode}_ 부분이 앞에 붙어서 "_Seq01" 처럼 되면 앞의 _ 제거
+        full_seq_name = full_seq_name.lstrip("_").rstrip("_")
+    except KeyError as e:
+        logger.warning(f"Missing key for sequence template: {e}")
+        full_seq_name = data.get("sequence", "")
+
+    # 5. 샷 이름 조합 (shot_name_template 사용)
+    if not shot_template:
+        shot_template = config_manager.get("shot_name_template")
+        
+    try:
+        full_shot_name = shot_template.format(**format_data)
+        full_shot_name = full_shot_name.lstrip("_").rstrip("_")
+    except KeyError as e:
+        logger.warning(f"Missing key for shot template: {e}")
+        full_shot_name = data.get("shot", name_without_ext)
+
+    return {
+        "episode_name": data.get("episode"),
+        "sequence_name": full_seq_name,
+        "shot_name": full_shot_name,
+        "task_name": task_name,
+        "version": int(data.get("version", 0))
+    }
 
 @app.get("/system/check-update")
 def check_update():
@@ -199,30 +342,6 @@ def get_task_status_types():
     except Exception as e:
         logger.error(f"Failed to get status types: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def parse_filename(filename: str) -> Optional[dict]:
-    match = FILENAME_PATTERN.search(filename)
-    if not match:
-        return None
-    data = match.groupdict()
-    task_map = {"comp": "Compositing", "ani": "Animation", "lit": "Lighting", "fx": "FX"}
-    task_raw = data["task"].lower()
-    task_name = task_map.get(task_raw, task_raw.capitalize())
-    
-    if data["episode"]:
-        seq_name = f"{data['episode']}_{data['sequence']}"
-        shot_name = f"{seq_name}_{data['shot_num']}"
-    else:
-        seq_name = data["sequence"]
-        shot_name = f"{seq_name}_{data['shot_num']}"
-
-    return {
-        "episode_name": data["episode"],
-        "sequence_name": seq_name,
-        "shot_name": shot_name,
-        "task_name": task_name,
-        "version": int(data["version"])
-    }
 
 @app.post("/files/scan", response_model=List[ScanResponseItem])
 def scan_directory(request: ScanRequest):
