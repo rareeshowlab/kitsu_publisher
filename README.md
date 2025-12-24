@@ -66,7 +66,8 @@ cd ..
 
 ```bash
 cd backend
-uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build:frontend/build" --clean desktop.py
+uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build:frontend/build" --clean desktop.py # MAC
+uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build;frontend/build" --clean desktop.py # WINDOWS
 ```
 
 ### 3. 결과물 확인
