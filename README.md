@@ -1,5 +1,17 @@
 # Kitsu Publisher Desktop App
 
+**Kitsu Publisher**는 CG/VFX 아티스트와 스튜디오를 위한 **CGWire Kitsu** 연동 데스크톱 애플리케이션입니다. 복잡한 파일 업로드 및 상태 업데이트 과정을 자동화하여 작업 효율을 극대화합니다.
+
+![Kitsu Publisher Desktop App Preview](frontend/img/preview.png)
+
+
+### 주요 기능
+- **일괄 업로드 (Batch Publishing)**: 여러 개의 리뷰 파일(Playblasts, Renders)을 한 번에 Kitsu에 업로드하고 상태를 업데이트합니다.
+- **자동 매칭**: 파일명 패턴(예: `SQ01_SH100_Comp_v001.mov`)을 분석하여 Kitsu의 해당 에피소드, 시퀀스, 샷, 태스크와 자동으로 연결합니다.
+- **커스텀 설정**: 스튜디오마다 다른 파일명 규칙을 자유롭게 설정할 수 있습니다.
+- **통합 로깅**: 업로드 진행 상황과 오류를 직관적인 UI를 통해 실시간으로 확인합니다.
+- **현대적인 UI/UX**: SvelteKit과 FastAPI 기반의 빠르고 미려한 데스크톱 인터페이스를 제공합니다.
+
 이 프로젝트는 **SvelteKit** 프론트엔드와 **FastAPI(Python)** 백엔드로 구성되어 있으며, `pywebview`를 통해 데스크톱 애플리케이션으로 실행됩니다.
 
 ## 필수 요구 사항
@@ -7,6 +19,36 @@
 - **Python 3.12+**
 - **Node.js** 또는 **Bun**
 - **uv** (최신 Python 패키지 매니저)
+
+---
+
+## 설치 가이드
+
+### 1. `uv` 설치 (Python 패키지 매니저)
+파이썬 환경 및 의존성 관리를 위해 `uv` 사용을 권장합니다.
+
+- **macOS / Linux**:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+- **Windows**:
+  ```powershell
+  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+
+### 2. `bun` 설치 (JavaScript 런타임)
+빠른 프론트엔드 빌드를 위해 `bun` 사용을 권장합니다.
+
+- **macOS / Linux**:
+  ```bash
+  curl -fsSL https://bun.sh/install | bash
+  ```
+- **Windows**:
+  ```powershell
+  powershell -c "irm https://bun.sh/install.ps1 | iex"
+  ```
+
+---
 
 ## 빠른 실행 (개발 & 테스트)
 
