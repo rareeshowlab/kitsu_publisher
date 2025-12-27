@@ -10,6 +10,7 @@ class ConfigManager:
         # 설정 파일 경로: ~/.kitsu_publisher_data/config.json
         self.config_dir = os.path.join(os.path.expanduser('~'), '.kitsu_publisher_data')
         self.config_file = os.path.join(self.config_dir, 'config.json')
+        self.config = {}
         self.config = self.load_config()
 
     def get_default_config(self) -> Dict[str, Any]:
