@@ -1,13 +1,14 @@
-// See https://svelte.dev/docs/kit/types#app.d.ts
-// for information about these interfaces
-declare global {
-	namespace App {
-		// interface Error {}
-		// interface Locals {}
-		// interface PageData {}
-		// interface PageState {}
-		// interface Platform {}
-	}
+interface PywebviewApi {
+	select_folder: () => Promise<string | null>;
+	save_session: (tokens: any, host: string) => Promise<boolean>;
+	get_session: () => Promise<any>;
+	clear_session: () => Promise<boolean>;
+	save_setting: (key: string, value: any) => Promise<boolean>;
+	get_setting: (key: string) => Promise<any>;
 }
 
-export {};
+interface Window {
+	pywebview: {
+		api: PywebviewApi;
+	};
+}

@@ -11,6 +11,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 from main import app
+from dependencies import config_manager
+
+# config_manager is imported from dependencies
 
 class Api:
     def __init__(self):
@@ -26,6 +29,29 @@ class Api:
         if result and len(result) > 0:
             return result[0]
         return None
+
+    def save_session(self, tokens, host):
+        config_manager.set("session", {"tokens": tokens, "host": host})
+        return True
+
+    def get_session(self):
+        return config_manager.get("session")
+
+    def clear_session(self):
+        config_manager.set("session", None)
+        return True
+
+    def save_setting(self, key, value):
+        config_manager.set(key, value)
+        return True
+
+    def get_setting(self, key):
+        return config_manager.get(key)
+
+    def open_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
+        return True
 
 def get_free_port():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

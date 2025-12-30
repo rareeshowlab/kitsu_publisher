@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import gazu
 from updater import Updater
 from config import ConfigManager
 
@@ -30,3 +31,19 @@ def setup_logging():
     queue_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(queue_handler)
     logging.getLogger().addHandler(queue_handler)
+
+def init_gazu():
+    """Initialize gazu with saved session if available"""
+    session = config_manager.get("session")
+    if session and "host" in session and "tokens" in session:
+        try:
+            host = session["host"]
+            tokens = session["tokens"]
+            logger.info(f"Restoring Kitsu session for host: {host}")
+            gazu.set_host(host)
+            gazu.client.set_tokens(tokens)
+        except Exception as e:
+            logger.error(f"Failed to restore session: {e}")
+
+# Initialize
+init_gazu()

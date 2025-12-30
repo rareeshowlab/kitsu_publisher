@@ -23,7 +23,9 @@ class ConfigManager:
             "sequence_name_template": "{episode}_{sequence}",
             # Kitsu에서의 샷 이름 구성 방식 (파일명의 토큰을 조합)
             # 예: 파일명이 SQ01_SH010 이면, 샷 이름도 SQ01_SH010
-            "shot_name_template": "{episode}_{sequence}_{shot}"
+            "shot_name_template": "{episode}_{sequence}_{shot}",
+            "session": None,
+            "last_directory": ""
         }
 
     def load_config(self) -> Dict[str, Any]:
@@ -50,7 +52,10 @@ class ConfigManager:
 
     def save_config(self, new_config: Dict[str, Any]):
         try:
+            # self.config를 먼저 업데이트
             self.config.update(new_config)
+            
+            # 파일에는 전체 config를 씀
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4)
             logger.info("Configuration saved.")
@@ -58,4 +63,8 @@ class ConfigManager:
             logger.error(f"Failed to save config: {e}")
 
     def get(self, key: str):
+        # self.config에서 먼저 찾고, 없으면 기본값에서 찾음
         return self.config.get(key, self.get_default_config().get(key))
+
+    def set(self, key: str, value: Any):
+        self.save_config({key: value})
