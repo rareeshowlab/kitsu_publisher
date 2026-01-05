@@ -1063,7 +1063,7 @@
 														>
 														{#if group.is_published}
 															<span
-																class="bg-slate-500/20 text-slate-400 border border-slate-500/20 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider"
+																class="bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider"
 																>PUBLISHED</span
 															>
 														{:else if group.match_status === "full"}
