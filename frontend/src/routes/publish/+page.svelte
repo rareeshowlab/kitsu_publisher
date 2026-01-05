@@ -13,7 +13,7 @@
 	let globalStatusId = $state("");
 
 	let directoryPath = $state("");
-	let displayGroups = $state([]); // UI에 표시될 그룹화된 데이터
+	let displayGroups = $state<any[]>([]); // UI에 표시될 그룹화된 데이터
 
 	let loading = $state(false);
 	let matching = $state(false); // 매칭 진행 중 여부
@@ -421,36 +421,82 @@
 
 		publishing = true;
 		error = "";
+		publishResults = { success: 0, failed: 0 };
+
 		try {
-			const payload = {
-				items: itemsToPublish.map((g) => ({
-					file_path: g.file_path,
-					shot_id: g.shot_id,
-					task_id: g.task_id,
-					comment: g.comment,
-					task_status_id: g.status_id,
-				})),
-			};
-			const response = await fetch("/publish/execute", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload),
-			});
-			if (response.ok) {
-				const results = await response.json();
-				const successCount = results.filter(
-					(r) => r.status === "success",
-				).length;
-				publishResults = {
-					success: successCount,
-					failed: results.length - successCount,
-				};
-				showSuccessModal = true;
-			} else {
-				error = "Publishing failed.";
+			for (let i = 0; i < displayGroups.length; i++) {
+				const group = displayGroups[i];
+				if (!group.selected || !group.task_id) continue;
+
+				// 개별 상태 업데이트
+				displayGroups[i] = { ...group, publish_status: "uploading" };
+				appendLog(
+					`[PUBLISH] Processing ${i + 1}/${itemsToPublish.length}: ${group.filename}`,
+				);
+
+				try {
+					const payload = {
+						items: [
+							{
+								file_path: group.file_path,
+								shot_id: group.shot_id,
+								task_id: group.task_id,
+								comment: group.comment,
+								task_status_id: group.status_id,
+							},
+						],
+					};
+
+					const response = await fetch("/publish/execute", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(payload),
+					});
+
+					if (response.ok) {
+						const results = await response.json();
+						if (results[0] && results[0].status === "success") {
+							displayGroups[i] = {
+								...displayGroups[i],
+								publish_status: "success",
+								is_published: true,
+								selected: false,
+							};
+							publishResults.success++;
+						} else {
+							const errorMsg =
+								results[0]?.message || "Unknown error";
+							displayGroups[i] = {
+								...displayGroups[i],
+								publish_status: "error",
+								error_message: errorMsg,
+							};
+							publishResults.failed++;
+							appendLog(`[ERROR] ${group.filename}: ${errorMsg}`);
+						}
+					} else {
+						displayGroups[i] = {
+							...displayGroups[i],
+							publish_status: "error",
+						};
+						publishResults.failed++;
+					}
+				} catch (err: any) {
+					displayGroups[i] = {
+						...displayGroups[i],
+						publish_status: "error",
+					};
+					publishResults.failed++;
+					appendLog(`[EXCEPTION] ${group.filename}: ${err.message}`);
+				}
 			}
-		} catch (e) {
-			error = "Error during publish.";
+
+			if (publishResults.success > 0 || publishResults.failed > 0) {
+				showSuccessModal = true;
+			}
+		} catch (e: any) {
+			error = "Error during publish process.";
+			appendLog(`[CRITICAL] Publish process interrupted: ${e.message}`);
 		} finally {
 			publishing = false;
 		}
@@ -501,7 +547,7 @@
 		<nav
 			class="bg-slate-900/50 backdrop-blur-md border-b border-slate-800 px-6 py-4 sticky top-0 z-20"
 		>
-			<div class="max-w-7xl mx-auto flex justify-between items-center">
+			<div class="px-8 flex justify-between items-center">
 				<div class="flex items-center gap-3">
 					<img
 						src={logo}
@@ -595,7 +641,7 @@
 			</div>
 		</nav>
 
-		<main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+		<main class="w-full px-8 py-8 space-y-8">
 			<section
 				class="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 overflow-hidden"
 			>
@@ -730,88 +776,89 @@
 					class="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
 				>
 					<div
-						class="flex flex-col sm:flex-row justify-between items-end sm:items-center gap-4"
+						class="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 overflow-hidden"
 					>
-						<h2
-							class="font-semibold text-slate-100 flex items-center gap-3"
-						>
-							<span
-								class="w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg shadow-blue-600/30"
-								>2</span
-							>
-							Review & Publish
-							{#if matching}
-								<span
-									class="inline-flex items-center gap-2 text-[10px] text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full animate-pulse border border-blue-400/20 ml-2 uppercase font-bold tracking-widest"
-									>Matching with Kitsu...</span
-								>
-							{:else}
-								<span
-									class="text-slate-500 font-normal text-sm ml-2"
-									>({displayGroups.filter((g) => g.selected)
-										.length} units)</span
-								>
-							{/if}
-						</h2>
-
 						<div
-							class="flex items-center gap-3 bg-slate-900 p-2 rounded-xl border border-slate-800 shadow-sm"
+							class="p-6 border-b border-slate-800 bg-slate-900/50 flex flex-col sm:flex-row justify-between items-end sm:items-center gap-4"
 						>
-							<span
-								class="text-[10px] font-bold text-slate-500 pl-2 uppercase tracking-widest"
-								>Set Selected:</span
+							<h2
+								class="font-semibold text-slate-100 flex items-center gap-3"
 							>
-							<div class="relative">
-								<select
-									onchange={(e) =>
-										applyGlobalTask(e.target.value)}
-									class="text-xs appearance-none border-none bg-slate-800 text-slate-200 rounded-lg py-1.5 pl-2 pr-7 focus:ring-0 cursor-pointer hover:bg-slate-700 transition-colors"
+								<span
+									class="w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg shadow-blue-600/30"
+									>2</span
 								>
-									<option value="">-- Task --</option>
-									{#each uniqueTaskTypes as taskName}<option
-											value={taskName}>{taskName}</option
-										>{/each}
-								</select>
-								<div
-									class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500"
-								>
-									<svg
-										class="h-3 w-3 fill-current"
-										viewBox="0 0 20 20"
-										><path
-											d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-										/></svg
+								Review & Publish
+								{#if matching}
+									<span
+										class="inline-flex items-center gap-2 text-[10px] text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full animate-pulse border border-blue-400/20 ml-2 uppercase font-bold tracking-widest"
+										>Matching with Kitsu...</span
 									>
+								{:else}
+									<span
+										class="text-slate-500 font-normal text-sm ml-2"
+										>({displayGroups.filter(
+											(g) => g.selected,
+										).length} units)</span
+									>
+								{/if}
+							</h2>
+
+							<div
+								class="flex items-center gap-3 bg-slate-800 p-2 rounded-xl border border-slate-700 shadow-sm"
+							>
+								<span
+									class="text-[10px] font-bold text-slate-500 pl-2 uppercase tracking-widest"
+									>Set Selected:</span
+								>
+								<div class="relative">
+									<select
+										onchange={(e) =>
+											applyGlobalTask(e.target.value)}
+										class="text-xs appearance-none border-none bg-slate-700 text-slate-200 rounded-lg py-1.5 pl-2 pr-7 focus:ring-0 cursor-pointer hover:bg-slate-600 transition-colors"
+									>
+										<option value="">-- Task --</option>
+										{#each uniqueTaskTypes as taskName}<option
+												value={taskName}
+												>{taskName}</option
+											>{/each}
+									</select>
+									<div
+										class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500"
+									>
+										<svg
+											class="h-3 w-3 fill-current"
+											viewBox="0 0 20 20"
+											><path
+												d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+											/></svg
+										>
+									</div>
 								</div>
-							</div>
-							<div class="relative">
-								<select
-									bind:value={globalStatusId}
-									onchange={applyGlobalStatus}
-									class="text-xs appearance-none border-none bg-slate-800 text-slate-200 rounded-lg py-1.5 pl-2 pr-7 focus:ring-0 cursor-pointer hover:bg-slate-700 transition-colors"
-								>
-									{#each statusTypes as s}<option value={s.id}
-											>{s.name}</option
-										>{/each}
-								</select>
-								<div
-									class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500"
-								>
-									<svg
-										class="h-3 w-3 fill-current"
-										viewBox="0 0 20 20"
-										><path
-											d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-										/></svg
+								<div class="relative">
+									<select
+										bind:value={globalStatusId}
+										onchange={applyGlobalStatus}
+										class="text-xs appearance-none border-none bg-slate-700 text-slate-200 rounded-lg py-1.5 pl-2 pr-7 focus:ring-0 cursor-pointer hover:bg-slate-600 transition-colors"
 									>
+										{#each statusTypes as s}<option
+												value={s.id}>{s.name}</option
+											>{/each}
+									</select>
+									<div
+										class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500"
+									>
+										<svg
+											class="h-3 w-3 fill-current"
+											viewBox="0 0 20 20"
+											><path
+												d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+											/></svg
+										>
+									</div>
 								</div>
 							</div>
 						</div>
-					</div>
-
-					<div
-						class="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 overflow-hidden"
-					>
 						<div class="overflow-x-auto">
 							<table class="w-full text-left border-collapse">
 								<thead>
@@ -904,18 +951,60 @@
 													class="rounded border-slate-700 bg-slate-800 text-blue-600 focus:ring-blue-500 disabled:opacity-30 cursor-pointer"
 												/></td
 											>
-											<td class="px-6 py-4"
-												><div class="flex flex-col">
+											<td class="px-6 py-4">
+												<div class="flex flex-col">
+													<div
+														class="flex items-center gap-2"
+													>
+														{#if group.publish_status === "uploading"}
+															<div
+																class="animate-spin h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full"
+															></div>
+														{:else if group.publish_status === "success"}
+															<svg
+																class="w-3.5 h-3.5 text-green-500"
+																fill="none"
+																viewBox="0 0 24 24"
+																stroke="currentColor"
+															>
+																<path
+																	stroke-linecap="round"
+																	stroke-linejoin="round"
+																	stroke-width="3"
+																	d="M5 13l4 4L19 7"
+																/>
+															</svg>
+														{:else if group.publish_status === "error"}
+															<svg
+																class="w-3.5 h-3.5 text-red-500"
+																fill="none"
+																viewBox="0 0 24 24"
+																stroke="currentColor"
+																title={group.error_message}
+															>
+																<path
+																	stroke-linecap="round"
+																	stroke-linejoin="round"
+																	stroke-width="3"
+																	d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+																/>
+															</svg>
+														{/if}
+														<span
+															class="text-sm font-medium {group.publish_status ===
+															'uploading'
+																? 'text-blue-400'
+																: 'text-slate-200'} truncate max-w-[800px] xl:max-w-[1200px]"
+															title={group.filename}
+															>{group.filename}</span
+														>
+													</div>
 													<span
-														class="text-sm font-medium text-slate-200 truncate max-w-[180px]"
-														title={group.filename}
-														>{group.filename}</span
-													><span
-														class="text-[9px] text-slate-500 truncate max-w-[180px] font-mono opacity-60 tracking-tighter"
+														class="text-[9px] text-slate-500 truncate max-w-[800px] xl:max-w-[1200px] font-mono opacity-60 tracking-tighter"
 														>{group.file_path}</span
 													>
-												</div></td
-											>
+												</div>
+											</td>
 											<td class="px-6 py-4">
 												{#if group.all_versions.length > 1}
 													<div class="relative">

@@ -59,7 +59,9 @@
 
 ```bash
 # 프론트엔드 빌드 (최초 1회 또는 변경 시)
-cd frontend && bun install && bun run build && cd ..
+cd frontend
+bun install
+bun run build
 
 # 데스크톱 앱 실행
 uv run backend/desktop.py
