@@ -22,10 +22,13 @@ def scan_directory(request: ScanRequest):
     video_extensions = {".mov", ".mp4"}
     
     # 설정 미리 로드 (성능 최적화)
-    pattern = config_manager.get("filename_pattern")
-    seq_template = config_manager.get("sequence_name_template")
-    shot_template = config_manager.get("shot_name_template")
-    default_task = config_manager.get("default_task_name")
+    # 전달받은 project_id에 따른 프로젝트별 설정을 먼저 가져옴
+    project_config = config_manager.get_project_config(request.project_id)
+    
+    pattern = project_config.get("filename_pattern")
+    seq_template = project_config.get("sequence_name_template")
+    shot_template = project_config.get("shot_name_template")
+    default_task = project_config.get("default_task_name")
     
     for root, _, files in os.walk(request.directory):
         for file in files:

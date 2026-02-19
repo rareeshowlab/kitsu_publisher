@@ -25,7 +25,8 @@ class ConfigManager:
             # 예: 파일명이 SQ01_SH010 이면, 샷 이름도 SQ01_SH010
             "shot_name_template": "{episode}_{sequence}_{shot}",
             "session": None,
-            "last_directory": ""
+            "last_directory": "",
+            "project_settings": {}  # 프로젝트별 설정을 저장할 딕셔너리
         }
 
     def load_config(self) -> Dict[str, Any]:
@@ -68,3 +69,28 @@ class ConfigManager:
 
     def set(self, key: str, value: Any):
         self.save_config({key: value})
+
+    def get_project_config(self, project_id: str) -> Dict[str, Any]:
+        """
+        특정 프로젝트의 설정을 가져옵니다. 프로젝트 설정이 없으면 전역 설정을 기본값으로 반환합니다.
+        """
+        project_settings = self.config.get("project_settings", {})
+        specific_config = project_settings.get(project_id, {})
+        
+        # 병합된 설정 반환
+        result = {
+            "default_task_name": self.get("default_task_name"),
+            "filename_pattern": self.get("filename_pattern"),
+            "sequence_name_template": self.get("sequence_name_template"),
+            "shot_name_template": self.get("shot_name_template")
+        }
+        result.update(specific_config)
+        return result
+
+    def save_project_config(self, project_id: str, new_project_config: Dict[str, Any]):
+        """
+        특정 프로젝트의 설정을 저장합니다.
+        """
+        project_settings = self.config.get("project_settings", {})
+        project_settings[project_id] = new_project_config
+        self.save_config({"project_settings": project_settings})
