@@ -106,19 +106,20 @@ cd ..
 ```
 
 ### 2. 실행 파일 생성 (PyInstaller)
-`uv` 환경 내에서 PyInstaller를 실행하여 빌드합니다.
+`backend/KitsuPublisher.spec` 파일을 사용하여 OS 및 버전에 맞는 실행 파일을 생성합니다.
 
 ```bash
 cd backend
-uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build:frontend/build" --clean desktop.py # MAC
-uv run pyinstaller --noconsole --onefile --name "KitsuPublisher" --icon="icon.icns" --add-data "../frontend/build;frontend/build" --clean desktop.py # WINDOWS
+uv run pyinstaller KitsuPublisher.spec
 ```
 
 ### 3. 결과물 확인
-빌드가 완료되면 `backend/dist/` 폴더에 실행 파일이 생성됩니다.
+빌드가 완료되면 `backend/dist/` 폴더에 OS와 버전 정보가 포함된 이름으로 실행 파일이 생성됩니다.
 
-- **macOS**: `backend/dist/KitsuPublisher.app`
-- **CLI**: `backend/dist/KitsuPublisher`
+- **macOS**: `backend/dist/KitsuPublisher_macOS_vX.X.X.app`
+- **Windows**: `backend/dist/KitsuPublisher_windows_vX.X.X.exe`
+
+*참고: 버전 정보는 `backend/version.py`에서 관리됩니다.*
 
 ```bash
 open backend/dist/KitsuPublisher.app

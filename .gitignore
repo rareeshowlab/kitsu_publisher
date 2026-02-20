@@ -30,7 +30,6 @@ frontend/dist/
 # PyInstaller
 backend/build/
 backend/dist/
-backend/*.spec
 backend/KitsuPublisher.iconset/
 
 # Logs
