@@ -1,8 +1,8 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from dependencies import config_manager, updater, log_queue
-from schemas import ConfigModel
+from schemas import ConfigModel, FtpConfigModel
 from services.parser import parse_filename
 
 router = APIRouter(tags=["system"])
@@ -19,6 +19,20 @@ def get_project_config(project_id: str):
 def update_project_config(project_id: str, config: ConfigModel):
     config_manager.save_project_config(project_id, config.dict())
     return {"status": "updated", "config": config_manager.get_project_config(project_id)}
+
+
+@router.get("/system/config/projects/{project_id}/ftp")
+def get_project_ftp_config(project_id: str):
+    cfg = config_manager.get_project_ftp_config(project_id)
+    if cfg is None:
+        return {"enabled": False, "protocol": "sftp", "host": "", "port": 22, "username": "", "password": "", "passive": True}
+    return cfg
+
+
+@router.post("/system/config/projects/{project_id}/ftp")
+def update_project_ftp_config(project_id: str, ftp_config: FtpConfigModel):
+    config_manager.save_project_config(project_id, {"ftp_config": ftp_config.dict()})
+    return {"status": "updated"}
 
 @router.post("/system/config")
 def update_config(config: ConfigModel):

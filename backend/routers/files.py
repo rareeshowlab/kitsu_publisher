@@ -12,6 +12,36 @@ from services.parser import parse_filename
 router = APIRouter(prefix="/files", tags=["files"])
 logger = logging.getLogger("kitsu_publisher")
 
+SEQUENCE_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".png"}
+
+
+def _find_sequence_folders(root_dir: str) -> dict:
+    """
+    디렉토리 트리에서 EXR/DPX 시퀀스 파일이 들어있는 폴더를 찾아
+    {폴더명.lower(): 폴더경로} 딕셔너리로 반환합니다.
+    """
+    seq_folders = {}
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fname in filenames:
+            if os.path.splitext(fname)[1].lower() in SEQUENCE_EXTENSIONS:
+                folder_name = os.path.basename(dirpath)
+                seq_folders[folder_name.lower()] = dirpath
+                break
+    return seq_folders
+
+
+def _find_matching_sequence_folder(shot_name: str, seq_folders: dict) -> str | None:
+    """shot_name을 포함하는 시퀀스 폴더를 찾아 경로를 반환합니다."""
+    if not shot_name:
+        return None
+    shot_lower = shot_name.lower()
+    for folder_name, folder_path in seq_folders.items():
+        if shot_lower in folder_name or folder_name in shot_lower:
+            return folder_path
+    return None
+
+
 @router.post("/scan", response_model=List[ScanResponseItem])
 def scan_directory(request: ScanRequest):
     logger.info(f"Scanning directory: {request.directory}")
@@ -20,16 +50,16 @@ def scan_directory(request: ScanRequest):
 
     results = []
     video_extensions = {".mov", ".mp4"}
-    
-    # 설정 미리 로드 (성능 최적화)
-    # 전달받은 project_id에 따른 프로젝트별 설정을 먼저 가져옴
+
     project_config = config_manager.get_project_config(request.project_id)
-    
     pattern = project_config.get("filename_pattern")
     seq_template = project_config.get("sequence_name_template")
     shot_template = project_config.get("shot_name_template")
     default_task = project_config.get("default_task_name")
-    
+
+    # EXR/DPX 시퀀스 폴더 미리 수집
+    seq_folders = _find_sequence_folders(request.directory)
+
     for root, _, files in os.walk(request.directory):
         for file in files:
             if file.startswith('.'):
@@ -38,17 +68,21 @@ def scan_directory(request: ScanRequest):
             if ext in video_extensions:
                 file_path = os.path.join(root, file)
                 parsed = parse_filename(file, pattern, seq_template, shot_template, default_task)
+                shot_name = parsed.get("shot_name") if parsed else None
+                sequence_folder = _find_matching_sequence_folder(shot_name, seq_folders)
                 if parsed:
                     results.append(ScanResponseItem(
                         file_path=file_path,
                         filename=file,
+                        sequence_folder=sequence_folder,
                         **parsed
                     ))
                 else:
                     results.append(ScanResponseItem(
                         file_path=file_path,
                         filename=file,
-                        episode_name=None, sequence_name="", shot_name="", task_name="", version=None
+                        episode_name=None, sequence_name="", shot_name="", task_name="", version=None,
+                        sequence_folder=sequence_folder
                     ))
     return results
 

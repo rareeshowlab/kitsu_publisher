@@ -2,6 +2,7 @@
 	import { onMount } from "svelte";
 	import { goto } from "$app/navigation";
 	import logo from "$lib/assets/logo.png";
+	import FtpTreeModal from "$lib/components/FtpTreeModal.svelte";
 
 	let config = $state({
 		default_task_name: "Compositing",
@@ -9,6 +10,21 @@
 		sequence_name_template: "{episode}_{sequence}",
 		shot_name_template: "{episode}_{sequence}_{shot}",
 	});
+
+	let ftpConfig = $state({
+		enabled: false,
+		protocol: "sftp",
+		host: "",
+		port: 22,
+		username: "",
+		password: "",
+		passive: true,
+		remote_root: "/",
+	});
+	let ftpTesting = $state(false);
+	let ftpTestResult = $state<{ ok: boolean; message: string } | null>(null);
+	let showFtpPassword = $state(false);
+	let ftpTreeOpen = $state(false);
 
 	let projects = $state<any[]>([]);
 	let selectedProjectId = $state("global"); // 'global' or project_id
@@ -43,7 +59,6 @@
 			const res = await fetch(url);
 			if (res.ok) {
 				const data = await res.json();
-				// 전역 설정 로드 시 project_settings는 UI에 안 보이게 필터링 필요할 수도 있지만 ConfigModel 스키마에 맞춰서 처리
 				config = {
 					default_task_name: data.default_task_name,
 					filename_pattern: data.filename_pattern,
@@ -54,6 +69,31 @@
 		} catch (e) {
 			console.error(e);
 		}
+
+		// Load FTP config (only for project-specific settings)
+		if (selectedProjectId !== "global") {
+			try {
+				const res = await fetch(`/system/config/projects/${selectedProjectId}/ftp`);
+				if (res.ok) {
+					const data = await res.json();
+					ftpConfig = {
+						enabled: data.enabled ?? false,
+						protocol: data.protocol ?? "sftp",
+						host: data.host ?? "",
+						port: data.port ?? 22,
+						username: data.username ?? "",
+						password: data.password ?? "",
+						passive: data.passive ?? true,
+						remote_root: data.remote_root ?? "/",
+					};
+				}
+			} catch (e) {
+				console.error(e);
+			}
+		} else {
+			ftpConfig = { enabled: false, protocol: "sftp", host: "", port: 22, username: "", password: "", passive: true, remote_root: "/" };
+		}
+		ftpTestResult = null;
 	}
 
 	async function saveConfig() {
@@ -68,6 +108,16 @@
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(config),
 			});
+
+			// Save FTP config if project-specific
+			if (selectedProjectId !== "global") {
+				await fetch(`/system/config/projects/${selectedProjectId}/ftp`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(ftpConfig),
+				});
+			}
+
 			if (res.ok) {
 				message = `${selectedProjectId === "global" ? "Global" : "Project"} configuration saved successfully!`;
 				setTimeout(() => (message = ""), 3000);
@@ -77,6 +127,32 @@
 		} catch (e) {
 			message = "Error saving configuration.";
 		}
+	}
+
+	async function testFtpConnection() {
+		ftpTesting = true;
+		ftpTestResult = null;
+		try {
+			const res = await fetch("/ftp/test", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(ftpConfig),
+			});
+			if (res.ok) {
+				ftpTestResult = { ok: true, message: "Connection successful!" };
+			} else {
+				const data = await res.json();
+				ftpTestResult = { ok: false, message: data.detail || "Connection failed" };
+			}
+		} catch (e: any) {
+			ftpTestResult = { ok: false, message: e.message };
+		} finally {
+			ftpTesting = false;
+		}
+	}
+
+	function handleFtpProtocolChange() {
+		ftpConfig.port = ftpConfig.protocol === "sftp" ? 22 : 21;
 	}
 
 	async function testParse() {
@@ -368,6 +444,180 @@
 			{/if}
 		</section>
 
+		<!-- FTP/SFTP Settings (project-specific only) -->
+		{#if selectedProjectId !== "global"}
+			<section class="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6 space-y-5 relative overflow-hidden">
+				<div class="absolute top-0 right-0 bg-emerald-600/10 text-emerald-400 text-[10px] font-bold px-3 py-1 rounded-bl-lg border-b border-l border-emerald-600/20 uppercase tracking-tighter">
+					FTP / SFTP
+				</div>
+
+				<div class="flex items-center justify-between">
+					<h3 class="text-base font-bold text-white">File Transfer Settings</h3>
+					<label class="flex items-center gap-3 cursor-pointer">
+						<span class="text-sm text-slate-400">Enable FTP Transfer</span>
+						<div
+							onclick={() => (ftpConfig.enabled = !ftpConfig.enabled)}
+							class="relative w-11 h-6 rounded-full transition-colors cursor-pointer {ftpConfig.enabled ? 'bg-emerald-600' : 'bg-slate-700'}"
+						>
+							<div class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform {ftpConfig.enabled ? 'translate-x-5' : ''}"></div>
+						</div>
+					</label>
+				</div>
+
+				{#if ftpConfig.enabled}
+					<div class="grid grid-cols-2 gap-4">
+						<!-- Protocol -->
+						<div class="col-span-2 sm:col-span-1">
+							<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Protocol</label>
+							<select
+								bind:value={ftpConfig.protocol}
+								onchange={handleFtpProtocolChange}
+								class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+							>
+								<option value="sftp">SFTP (SSH, port 22)</option>
+								<option value="ftp">FTP (port 21)</option>
+							</select>
+						</div>
+
+						<!-- Port -->
+						<div class="col-span-2 sm:col-span-1">
+							<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Port</label>
+							<input
+								type="number"
+								bind:value={ftpConfig.port}
+								class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+							/>
+						</div>
+
+						<!-- Host -->
+						<div class="col-span-2">
+							<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Host / IP</label>
+							<input
+								type="text"
+								bind:value={ftpConfig.host}
+								placeholder="e.g. ftp.example.com or 192.168.1.100"
+								class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition-all placeholder-slate-600"
+							/>
+						</div>
+
+						<!-- Username -->
+						<div>
+							<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Username</label>
+							<input
+								type="text"
+								bind:value={ftpConfig.username}
+								autocomplete="off"
+								class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+							/>
+						</div>
+
+						<!-- Password -->
+						<div>
+							<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Password</label>
+							<div class="relative">
+								{#if showFtpPassword}
+									<input
+										type="text"
+										bind:value={ftpConfig.password}
+										autocomplete="off"
+										class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 pr-10 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+									/>
+								{:else}
+									<input
+										type="password"
+										bind:value={ftpConfig.password}
+										autocomplete="off"
+										class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-xl px-4 py-2.5 pr-10 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+									/>
+								{/if}
+								<button
+									type="button"
+									onclick={() => (showFtpPassword = !showFtpPassword)}
+									class="absolute inset-y-0 right-3 flex items-center text-slate-500 hover:text-slate-300 transition-colors"
+								>
+									{#if showFtpPassword}
+										<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
+									{:else}
+										<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+									{/if}
+								</button>
+							</div>
+						</div>
+
+						<!-- FTP passive mode (only for FTP) -->
+						{#if ftpConfig.protocol === "ftp"}
+							<div class="col-span-2 flex items-center gap-3">
+								<input
+									type="checkbox"
+									id="ftp-passive"
+									bind:checked={ftpConfig.passive}
+									class="rounded border-slate-700 bg-slate-800 text-emerald-600"
+								/>
+								<label for="ftp-passive" class="text-sm text-slate-400">Use Passive Mode (PASV) — recommended for most servers</label>
+							</div>
+						{/if}
+					</div>
+
+					<!-- Remote Root Path -->
+					<div class="pt-2">
+						<label class="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">
+							Default Upload Root Path
+						</label>
+						<p class="text-xs text-slate-500 mb-2">
+							이 프로젝트의 기본 업로드 경로입니다. 전송 시 이 경로부터 탐색을 시작합니다.
+						</p>
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={ftpConfig.remote_root}
+								placeholder="/"
+								class="flex-1 bg-slate-800 border border-slate-700 text-slate-200 font-mono text-sm rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition-all placeholder-slate-600"
+							/>
+							<button
+								onclick={() => (ftpTreeOpen = true)}
+								disabled={!ftpConfig.host || !ftpConfig.username}
+								title="Browse server to select root path"
+								class="bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200 px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm font-medium"
+							>
+								<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+								</svg>
+								Browse
+							</button>
+						</div>
+					</div>
+
+					<!-- Test connection -->
+					<div class="flex items-center gap-4 pt-2">
+						<button
+							onclick={testFtpConnection}
+							disabled={ftpTesting || !ftpConfig.host || !ftpConfig.username}
+							class="bg-slate-700 hover:bg-slate-600 text-white font-medium px-5 py-2 rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 text-sm"
+						>
+							{#if ftpTesting}
+								<div class="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+								Testing...
+							{:else}
+								<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+								Test Connection
+							{/if}
+						</button>
+
+						{#if ftpTestResult}
+							<div class="flex items-center gap-2 text-sm {ftpTestResult.ok ? 'text-emerald-400' : 'text-red-400'}">
+								{#if ftpTestResult.ok}
+									<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+								{:else}
+									<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+								{/if}
+								{ftpTestResult.message}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</section>
+		{/if}
+
 		<div class="flex justify-end pt-4">
 			<button
 				onclick={saveConfig}
@@ -386,3 +636,12 @@
 		{/if}
 	</main>
 </div>
+
+{#if ftpConfig.enabled && selectedProjectId !== "global"}
+	<FtpTreeModal
+		bind:isOpen={ftpTreeOpen}
+		ftpConfig={ftpConfig}
+		initialPath={ftpConfig.remote_root || "/"}
+		onConfirm={(path) => { ftpConfig.remote_root = path; }}
+	/>
+{/if}

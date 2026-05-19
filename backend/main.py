@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dependencies import setup_logging
-from routers import auth, system, kitsu, files, publish
+from routers import auth, system, kitsu, files, publish, ftp
 
 # Logging 설정
 setup_logging()
@@ -43,6 +43,7 @@ app.include_router(system.router)
 app.include_router(kitsu.router)
 app.include_router(files.router)
 app.include_router(publish.router)
+app.include_router(ftp.router)
 
 @app.get("/")
 def read_root():

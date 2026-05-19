@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("kitsu_publisher")
 
@@ -76,13 +76,14 @@ class ConfigManager:
         """
         project_settings = self.config.get("project_settings", {})
         specific_config = project_settings.get(project_id, {})
-        
+
         # 병합된 설정 반환
         result = {
             "default_task_name": self.get("default_task_name"),
             "filename_pattern": self.get("filename_pattern"),
             "sequence_name_template": self.get("sequence_name_template"),
-            "shot_name_template": self.get("shot_name_template")
+            "shot_name_template": self.get("shot_name_template"),
+            "ftp_config": None
         }
         result.update(specific_config)
         return result
@@ -92,5 +93,12 @@ class ConfigManager:
         특정 프로젝트의 설정을 저장합니다.
         """
         project_settings = self.config.get("project_settings", {})
-        project_settings[project_id] = new_project_config
+        existing = project_settings.get(project_id, {})
+        existing.update(new_project_config)
+        project_settings[project_id] = existing
         self.save_config({"project_settings": project_settings})
+
+    def get_project_ftp_config(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """프로젝트의 FTP 설정을 반환합니다."""
+        cfg = self.get_project_config(project_id)
+        return cfg.get("ftp_config")

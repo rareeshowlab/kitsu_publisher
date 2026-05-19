@@ -12,7 +12,8 @@ dependencies = [
     "requests",
     "packaging",
     "pillow",
-    "pyinstaller"
+    "pyinstaller",
+    "paramiko>=5.0.0",
 ]
 
 [tool.uv]

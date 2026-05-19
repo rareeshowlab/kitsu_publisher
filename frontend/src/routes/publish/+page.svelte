@@ -4,6 +4,7 @@
 	import { goto } from "$app/navigation";
 	import logo from "$lib/assets/logo.png";
 	import AboutModal from "$lib/components/AboutModal.svelte";
+	import FtpTreeModal from "$lib/components/FtpTreeModal.svelte";
 
 	// State
 	let aboutOpen = $state(false);
@@ -11,6 +12,12 @@
 	let selectedProjectId = $state("");
 	let statusTypes = $state([]);
 	let globalStatusId = $state("");
+
+	// FTP State
+	let ftpConfig = $state<any>(null); // null = no FTP configured for this project
+	let ftpTreeOpen = $state(false);
+	let ftpDestPath = $state("/");
+	let transferring = $state(false);
 
 	let directoryPath = $state("");
 	let displayGroups = $state<any[]>([]); // UI에 표시될 그룹화된 데이터
@@ -206,6 +213,25 @@
 			console.error(e);
 		}
 	}
+
+	async function fetchFtpConfig(projectId: string) {
+		if (!projectId) { ftpConfig = null; return; }
+		try {
+			const res = await fetch(`/system/config/projects/${projectId}/ftp`);
+			if (res.ok) {
+				const data = await res.json();
+				ftpConfig = data.enabled ? data : null;
+			} else {
+				ftpConfig = null;
+			}
+		} catch (e) {
+			ftpConfig = null;
+		}
+	}
+
+	$effect(() => {
+		if (selectedProjectId) fetchFtpConfig(selectedProjectId);
+	});
 
 	async function fetchStatusTypes() {
 		try {
@@ -413,13 +439,76 @@
 		});
 	}
 
+	async function ftpTransferItem(group: any): Promise<boolean> {
+		const items = [];
+
+		// MOV file
+		items.push({
+			local_path: group.file_path,
+			is_dir: false,
+			remote_name: group.filename,
+		});
+
+		// EXR/DPX sequence folder (if found)
+		if (group.sequence_folder) {
+			const folderName = group.sequence_folder.split("/").pop() || group.sequence_folder.split("\\").pop();
+			items.push({
+				local_path: group.sequence_folder,
+				is_dir: true,
+				remote_name: folderName,
+			});
+		}
+
+		appendLog(`[FTP] Transferring ${group.filename}${group.sequence_folder ? " + sequence folder" : ""}...`);
+
+		const res = await fetch("/ftp/transfer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				config: ftpConfig,
+				remote_dest: ftpDestPath,
+				items,
+			}),
+		});
+
+		if (!res.ok) {
+			const data = await res.json();
+			throw new Error(data.detail || "FTP transfer failed");
+		}
+
+		const results = await res.json();
+		const failed = results.filter((r: any) => r.status === "error");
+		if (failed.length > 0) {
+			throw new Error(failed[0].message || "Transfer error");
+		}
+		return true;
+	}
+
 	async function handlePublish() {
 		const itemsToPublish = displayGroups.filter(
 			(g) => g.selected && g.task_id,
 		);
 		if (itemsToPublish.length === 0) return;
 
+		// FTP 모드: Tree 뷰 먼저
+		if (ftpConfig) {
+			ftpTreeOpen = true;
+			return;
+		}
+
+		await executePublish(itemsToPublish);
+	}
+
+	async function handleFtpDestConfirm(destPath: string) {
+		ftpDestPath = destPath;
+		ftpTreeOpen = false;
+		const itemsToPublish = displayGroups.filter((g) => g.selected && g.task_id);
+		await executePublish(itemsToPublish);
+	}
+
+	async function executePublish(itemsToPublish: any[]) {
 		publishing = true;
+		transferring = !!ftpConfig;
 		error = "";
 		publishResults = { success: 0, failed: 0 };
 
@@ -428,11 +517,31 @@
 				const group = displayGroups[i];
 				if (!group.selected || !group.task_id) continue;
 
-				// 개별 상태 업데이트
-				displayGroups[i] = { ...group, publish_status: "uploading" };
-				appendLog(
-					`[PUBLISH] Processing ${i + 1}/${itemsToPublish.length}: ${group.filename}`,
-				);
+				const itemIndex = itemsToPublish.indexOf(group);
+				const itemNum = itemIndex + 1;
+
+				// FTP 전송 단계
+				if (ftpConfig) {
+					displayGroups[i] = { ...group, publish_status: "ftp_uploading" };
+					appendLog(`[FTP] ${itemNum}/${itemsToPublish.length}: ${group.filename}`);
+					try {
+						await ftpTransferItem(group);
+						appendLog(`[FTP] Done: ${group.filename}`);
+					} catch (ftpErr: any) {
+						displayGroups[i] = {
+							...displayGroups[i],
+							publish_status: "error",
+							error_message: `FTP: ${ftpErr.message}`,
+						};
+						publishResults.failed++;
+						appendLog(`[FTP ERROR] ${group.filename}: ${ftpErr.message}`);
+						continue; // FTP 실패 시 Kitsu 퍼블리시 건너뜀
+					}
+				}
+
+				// Kitsu 퍼블리시 단계
+				displayGroups[i] = { ...displayGroups[i], publish_status: "uploading" };
+				appendLog(`[PUBLISH] ${itemNum}/${itemsToPublish.length}: ${group.filename}`);
 
 				try {
 					const payload = {
@@ -464,8 +573,7 @@
 							};
 							publishResults.success++;
 						} else {
-							const errorMsg =
-								results[0]?.message || "Unknown error";
+							const errorMsg = results[0]?.message || "Unknown error";
 							displayGroups[i] = {
 								...displayGroups[i],
 								publish_status: "error",
@@ -475,17 +583,11 @@
 							appendLog(`[ERROR] ${group.filename}: ${errorMsg}`);
 						}
 					} else {
-						displayGroups[i] = {
-							...displayGroups[i],
-							publish_status: "error",
-						};
+						displayGroups[i] = { ...displayGroups[i], publish_status: "error" };
 						publishResults.failed++;
 					}
 				} catch (err: any) {
-					displayGroups[i] = {
-						...displayGroups[i],
-						publish_status: "error",
-					};
+					displayGroups[i] = { ...displayGroups[i], publish_status: "error" };
 					publishResults.failed++;
 					appendLog(`[EXCEPTION] ${group.filename}: ${err.message}`);
 				}
@@ -496,9 +598,10 @@
 			}
 		} catch (e: any) {
 			error = "Error during publish process.";
-			appendLog(`[CRITICAL] Publish process interrupted: ${e.message}`);
+			appendLog(`[CRITICAL] Process interrupted: ${e.message}`);
 		} finally {
 			publishing = false;
+			transferring = false;
 		}
 	}
 
@@ -956,7 +1059,12 @@
 													<div
 														class="flex items-center gap-2"
 													>
-														{#if group.publish_status === "uploading"}
+														{#if group.publish_status === "ftp_uploading"}
+															<div class="flex items-center gap-1">
+																<div class="animate-spin h-3 w-3 border-2 border-emerald-400 border-t-transparent rounded-full"></div>
+																<span class="text-[9px] text-emerald-400 font-bold uppercase">FTP</span>
+															</div>
+														{:else if group.publish_status === "uploading"}
 															<div
 																class="animate-spin h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full"
 															></div>
@@ -1003,6 +1111,12 @@
 														class="text-[9px] text-slate-500 truncate max-w-[800px] xl:max-w-[1200px] font-mono opacity-60 tracking-tighter"
 														>{group.file_path}</span
 													>
+														{#if group.sequence_folder}
+															<span class="text-[9px] text-emerald-600 font-mono tracking-tighter flex items-center gap-1 mt-0.5">
+																<svg class="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+																{group.sequence_folder.split("/").at(-1)}
+															</span>
+														{/if}
 												</div>
 											</td>
 											<td class="px-6 py-4">
@@ -1196,37 +1310,30 @@
 				<div
 					class="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/80 backdrop-blur-lg border-t border-slate-800 shadow-2xl flex justify-center items-center gap-6 z-30"
 				>
-					<div class="text-sm text-slate-400">
-						Ready to publish <strong
-							class="text-white text-base mx-1"
-							>{displayGroups.filter((g) => g.selected)
-								.length}</strong
-						> shots
+					<div class="text-sm text-slate-400 flex items-center gap-3">
+						Ready to publish <strong class="text-white text-base mx-1">{displayGroups.filter((g) => g.selected).length}</strong> shots
+						{#if ftpConfig}
+							<span class="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
+								<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
+								FTP {ftpConfig.protocol.toUpperCase()} ON
+							</span>
+						{/if}
 					</div>
 					<button
 						onclick={handlePublish}
 						disabled={publishing ||
-							displayGroups.filter((g) => g.selected).length ===
-								0}
-						class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transform active:scale-95"
+							displayGroups.filter((g) => g.selected).length === 0}
+						class="{ftpConfig ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transform active:scale-95"
 					>
-						{#if publishing}<svg
-								class="animate-spin h-5 w-5"
-								viewBox="0 0 24 24"
-								><circle
-									class="opacity-25"
-									cx="12"
-									cy="12"
-									r="10"
-									stroke="currentColor"
-									stroke-width="4"
-									fill="none"
-								></circle><path
-									class="opacity-75"
-									fill="currentColor"
-									d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-								></path></svg
-							>Publishing...{:else}🚀 Publish Now{/if}
+						{#if publishing}
+							<svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+							{transferring ? "Transferring..." : "Publishing..."}
+						{:else if ftpConfig}
+							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
+							Transfer + Publish
+						{:else}
+							🚀 Publish Now
+						{/if}
 					</button>
 				</div>
 			{/if}
@@ -1383,4 +1490,13 @@
 		</div>
 	{/if}
 	<AboutModal bind:isOpen={aboutOpen} />
+
+	{#if ftpConfig}
+		<FtpTreeModal
+			bind:isOpen={ftpTreeOpen}
+			ftpConfig={ftpConfig}
+			initialPath={ftpConfig?.remote_root || "/"}
+			onConfirm={handleFtpDestConfirm}
+		/>
+	{/if}
 </div>
