@@ -327,6 +327,7 @@
 						g.file_path = latest.file_path;
 						g.filename = latest.filename;
 						g.version = latest.version;
+						g.sequence_folder = latest.sequence_folder ?? null;
 					});
 
 					displayGroups = Object.values(groups);
@@ -409,6 +410,7 @@
 		group.file_path = selected.file_path;
 		group.filename = selected.filename;
 		group.version = selected.version;
+		group.sequence_folder = selected.sequence_folder ?? null;
 		group.selected_file_index = index;
 	}
 

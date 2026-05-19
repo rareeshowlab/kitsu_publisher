@@ -15,31 +15,42 @@ logger = logging.getLogger("kitsu_publisher")
 SEQUENCE_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".png"}
 
 
-def _find_sequence_folders(root_dir: str) -> dict:
+def _find_sequence_folders(root_dir: str) -> list[tuple[str, str]]:
     """
-    디렉토리 트리에서 EXR/DPX 시퀀스 파일이 들어있는 폴더를 찾아
-    {폴더명.lower(): 폴더경로} 딕셔너리로 반환합니다.
+    디렉토리 트리에서 EXR/DPX 시퀀스 파일이 들어있는 폴더를 모두 찾아
+    [(폴더명.lower(), 폴더경로), ...] 리스트로 반환합니다.
+    같은 이름의 폴더(버전별)도 모두 포함합니다.
     """
-    seq_folders = {}
+    seq_folders = []
     for dirpath, dirnames, filenames in os.walk(root_dir):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for fname in filenames:
             if os.path.splitext(fname)[1].lower() in SEQUENCE_EXTENSIONS:
                 folder_name = os.path.basename(dirpath)
-                seq_folders[folder_name.lower()] = dirpath
+                seq_folders.append((folder_name.lower(), dirpath))
                 break
     return seq_folders
 
 
-def _find_matching_sequence_folder(shot_name: str, seq_folders: dict) -> str | None:
-    """shot_name을 포함하는 시퀀스 폴더를 찾아 경로를 반환합니다."""
+def _find_matching_sequence_folder(shot_name: str, version: int | None, seq_folders: list) -> str | None:
+    """shot_name과 version을 모두 고려해 가장 적합한 시퀀스 폴더를 반환합니다."""
     if not shot_name:
         return None
     shot_lower = shot_name.lower()
-    for folder_name, folder_path in seq_folders.items():
-        if shot_lower in folder_name or folder_name in shot_lower:
-            return folder_path
-    return None
+
+    def name_matches(folder_name: str) -> bool:
+        return shot_lower in folder_name or folder_name in shot_lower
+
+    # 1순위: shot name + version 둘 다 매칭
+    if version is not None:
+        ver_variants = {f"v{version:03d}", f"v{version:02d}", f"v{version}"}
+        for folder_name, folder_path in seq_folders:
+            if name_matches(folder_name) and any(v in folder_name for v in ver_variants):
+                return folder_path
+
+    # 2순위: shot name만 매칭 (버전 정보 없는 폴더 구조)
+    candidates = [(fn, fp) for fn, fp in seq_folders if name_matches(fn)]
+    return candidates[0][1] if candidates else None
 
 
 @router.post("/scan", response_model=List[ScanResponseItem])
@@ -69,7 +80,8 @@ def scan_directory(request: ScanRequest):
                 file_path = os.path.join(root, file)
                 parsed = parse_filename(file, pattern, seq_template, shot_template, default_task)
                 shot_name = parsed.get("shot_name") if parsed else None
-                sequence_folder = _find_matching_sequence_folder(shot_name, seq_folders)
+                version = parsed.get("version") if parsed else None
+                sequence_folder = _find_matching_sequence_folder(shot_name, version, seq_folders)
                 if parsed:
                     results.append(ScanResponseItem(
                         file_path=file_path,
