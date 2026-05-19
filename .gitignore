@@ -45,3 +45,5 @@ frontend/frontend.log
 .idea/
 *.swp
 *.swo
+
+.claude/
