@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from dependencies import config_manager, updater, log_queue
-from schemas import ConfigModel, FtpConfigModel
+from schemas import ConfigModel, FtpGlobalConfig, FtpProjectRoot
 from services.parser import parse_filename
 
 router = APIRouter(tags=["system"])
@@ -21,17 +21,24 @@ def update_project_config(project_id: str, config: ConfigModel):
     return {"status": "updated", "config": config_manager.get_project_config(project_id)}
 
 
-@router.get("/system/config/projects/{project_id}/ftp")
-def get_project_ftp_config(project_id: str):
-    cfg = config_manager.get_project_ftp_config(project_id)
-    if cfg is None:
-        return {"enabled": False, "protocol": "sftp", "host": "", "port": 22, "username": "", "password": "", "passive": True}
-    return cfg
+# ── 글로벌 FTP 설정 ────────────────────────────────────────────────────────
+@router.get("/system/config/ftp")
+def get_global_ftp_config():
+    return config_manager.get_global_ftp_config()
 
+@router.post("/system/config/ftp")
+def update_global_ftp_config(ftp_config: FtpGlobalConfig):
+    config_manager.save_global_ftp_config(ftp_config.dict())
+    return {"status": "updated"}
 
-@router.post("/system/config/projects/{project_id}/ftp")
-def update_project_ftp_config(project_id: str, ftp_config: FtpConfigModel):
-    config_manager.save_project_config(project_id, {"ftp_config": ftp_config.dict()})
+# ── 프로젝트별 FTP 루트 경로 ────────────────────────────────────────────────
+@router.get("/system/config/projects/{project_id}/ftp-root")
+def get_project_ftp_root(project_id: str):
+    return {"remote_root": config_manager.get_project_ftp_root(project_id)}
+
+@router.post("/system/config/projects/{project_id}/ftp-root")
+def update_project_ftp_root(project_id: str, body: FtpProjectRoot):
+    config_manager.save_project_ftp_root(project_id, body.remote_root)
     return {"status": "updated"}
 
 @router.post("/system/config")

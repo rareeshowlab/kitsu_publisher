@@ -71,34 +71,47 @@ class ConfigManager:
         self.save_config({key: value})
 
     def get_project_config(self, project_id: str) -> Dict[str, Any]:
-        """
-        특정 프로젝트의 설정을 가져옵니다. 프로젝트 설정이 없으면 전역 설정을 기본값으로 반환합니다.
-        """
+        """특정 프로젝트의 설정을 가져옵니다."""
         project_settings = self.config.get("project_settings", {})
         specific_config = project_settings.get(project_id, {})
-
-        # 병합된 설정 반환
         result = {
             "default_task_name": self.get("default_task_name"),
             "filename_pattern": self.get("filename_pattern"),
             "sequence_name_template": self.get("sequence_name_template"),
             "shot_name_template": self.get("shot_name_template"),
-            "ftp_config": None
         }
         result.update(specific_config)
         return result
 
     def save_project_config(self, project_id: str, new_project_config: Dict[str, Any]):
-        """
-        특정 프로젝트의 설정을 저장합니다.
-        """
+        """특정 프로젝트의 설정을 저장합니다."""
         project_settings = self.config.get("project_settings", {})
         existing = project_settings.get(project_id, {})
         existing.update(new_project_config)
         project_settings[project_id] = existing
         self.save_config({"project_settings": project_settings})
 
-    def get_project_ftp_config(self, project_id: str) -> Optional[Dict[str, Any]]:
-        """프로젝트의 FTP 설정을 반환합니다."""
-        cfg = self.get_project_config(project_id)
-        return cfg.get("ftp_config")
+    # ── 글로벌 FTP 설정 (Kitsu 로그인 단위) ──────────────────────────────
+    _FTP_DEFAULT: Dict[str, Any] = {
+        "enabled": False, "protocol": "sftp", "host": "",
+        "port": 22, "username": "", "password": "", "passive": True,
+    }
+
+    def get_global_ftp_config(self) -> Dict[str, Any]:
+        """전역 FTP 접속 설정을 반환합니다."""
+        stored = self.config.get("ftp_global", {})
+        return {**self._FTP_DEFAULT, **stored}
+
+    def save_global_ftp_config(self, ftp_config: Dict[str, Any]):
+        """전역 FTP 접속 설정을 저장합니다."""
+        self.save_config({"ftp_global": ftp_config})
+
+    # ── 프로젝트별 FTP 루트 경로 ─────────────────────────────────────────
+    def get_project_ftp_root(self, project_id: str) -> str:
+        """프로젝트의 FTP 업로드 루트 경로를 반환합니다."""
+        project_settings = self.config.get("project_settings", {})
+        return project_settings.get(project_id, {}).get("ftp_remote_root", "/")
+
+    def save_project_ftp_root(self, project_id: str, remote_root: str):
+        """프로젝트의 FTP 업로드 루트 경로를 저장합니다."""
+        self.save_project_config(project_id, {"ftp_remote_root": remote_root})

@@ -59,7 +59,8 @@ class ConfigModel(BaseModel):
     shot_name_template: str
 
 
-class FtpConfigModel(BaseModel):
+# 글로벌 FTP 접속 설정 (Kitsu 로그인 단위로 하나)
+class FtpGlobalConfig(BaseModel):
     enabled: bool = False
     protocol: str = "sftp"  # "ftp" or "sftp"
     host: str = ""
@@ -67,7 +68,22 @@ class FtpConfigModel(BaseModel):
     username: str = ""
     password: str = ""
     passive: bool = True  # FTP only
-    remote_root: str = "/"  # default upload root path for this project
+
+
+# 라우터 내부에서 접속 정보로 사용하는 모델 (FtpGlobalConfig와 동일 구조)
+class FtpConfigModel(BaseModel):
+    enabled: bool = False
+    protocol: str = "sftp"
+    host: str = ""
+    port: int = 22
+    username: str = ""
+    password: str = ""
+    passive: bool = True
+
+
+# 프로젝트별 FTP 루트 경로
+class FtpProjectRoot(BaseModel):
+    remote_root: str = "/"
 
 
 class FtpBrowseRequest(BaseModel):

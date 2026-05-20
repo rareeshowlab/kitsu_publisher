@@ -217,10 +217,20 @@
 	async function fetchFtpConfig(projectId: string) {
 		if (!projectId) { ftpConfig = null; return; }
 		try {
-			const res = await fetch(`/system/config/projects/${projectId}/ftp`);
-			if (res.ok) {
-				const data = await res.json();
-				ftpConfig = data.enabled ? data : null;
+			// 글로벌 접속 설정 + 프로젝트별 루트 경로를 병렬로 로드
+			const [globalRes, rootRes] = await Promise.all([
+				fetch("/system/config/ftp"),
+				fetch(`/system/config/projects/${projectId}/ftp-root`),
+			]);
+			if (globalRes.ok) {
+				const globalData = await globalRes.json();
+				if (globalData.enabled) {
+					const rootData = rootRes.ok ? await rootRes.json() : { remote_root: "/" };
+					// 접속 정보 + 프로젝트 루트 경로를 합쳐서 ftpConfig 구성
+					ftpConfig = { ...globalData, remote_root: rootData.remote_root ?? "/" };
+				} else {
+					ftpConfig = null;
+				}
 			} else {
 				ftpConfig = null;
 			}
