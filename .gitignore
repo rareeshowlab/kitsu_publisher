@@ -47,3 +47,4 @@ frontend/frontend.log
 *.swo
 
 .claude/
+.antigravitycli

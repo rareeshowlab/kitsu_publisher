@@ -180,6 +180,22 @@
 					const data = await response.json();
 					user.set(data.user);
 					kitsuHost.set(storedHost);
+
+					// 백엔드에서 토큰을 갱신한 경우 저장
+					if (data.tokens) {
+						const tokensStr = JSON.stringify(data.tokens);
+						localStorage.setItem("kitsu_tokens", tokensStr);
+						if (
+							window.pywebview &&
+							window.pywebview.api &&
+							window.pywebview.api.save_session
+						) {
+							await window.pywebview.api.save_session(
+								data.tokens,
+								storedHost,
+							);
+						}
+					}
 				} else {
 					if (
 						window.pywebview &&
@@ -524,21 +540,25 @@
 		error = "";
 		publishResults = { success: 0, failed: 0 };
 
+		const ftpSuccessfulItems = new Set<string>();
+
 		try {
-			for (let i = 0; i < displayGroups.length; i++) {
-				const group = displayGroups[i];
-				if (!group.selected || !group.task_id) continue;
+			// 1단계: FTP 전송 단계 (일괄 처리)
+			if (ftpConfig) {
+				appendLog(`[FTP] ${itemsToPublish.length}개 항목의 FTP 전송을 시작합니다.`);
+				for (let i = 0; i < displayGroups.length; i++) {
+					const group = displayGroups[i];
+					if (!group.selected || !group.task_id) continue;
 
-				const itemIndex = itemsToPublish.indexOf(group);
-				const itemNum = itemIndex + 1;
+					const itemIndex = itemsToPublish.indexOf(group);
+					const itemNum = itemIndex + 1;
 
-				// FTP 전송 단계
-				if (ftpConfig) {
 					displayGroups[i] = { ...group, publish_status: "ftp_uploading" };
 					appendLog(`[FTP] ${itemNum}/${itemsToPublish.length}: ${group.filename}`);
 					try {
 						await ftpTransferItem(group);
-						appendLog(`[FTP] Done: ${group.filename}`);
+						appendLog(`[FTP] 완료: ${group.filename}`);
+						ftpSuccessfulItems.add(group.file_path);
 					} catch (ftpErr: any) {
 						displayGroups[i] = {
 							...displayGroups[i],
@@ -546,12 +566,64 @@
 							error_message: `FTP: ${ftpErr.message}`,
 						};
 						publishResults.failed++;
-						appendLog(`[FTP ERROR] ${group.filename}: ${ftpErr.message}`);
-						continue; // FTP 실패 시 Kitsu 퍼블리시 건너뜀
+						appendLog(`[FTP 에러] ${group.filename}: ${ftpErr.message}`);
 					}
 				}
+				appendLog(`[FTP] 일괄 전송 프로세스가 완료되었습니다. (성공: ${ftpSuccessfulItems.size}개)`);
+			}
 
-				// Kitsu 퍼블리시 단계
+			// 2단계: Kitsu 세션 사전 자동 복구 (장시간 FTP 전송으로 인한 토큰 만료 방어)
+			if (ftpConfig && itemsToPublish.length > 0) {
+				appendLog(`[SYSTEM] Kitsu 세션 상태를 복구하고 재인증을 수행합니다...`);
+				let storedTokens = localStorage.getItem("kitsu_tokens");
+				let storedHost = localStorage.getItem("kitsu_host");
+				if (window.pywebview && window.pywebview.api && window.pywebview.api.get_session) {
+					try {
+						const session = await window.pywebview.api.get_session();
+						if (session) {
+							storedTokens = JSON.stringify(session.tokens);
+							storedHost = session.host;
+						}
+					} catch (e) {
+						console.error("Failed to get session from backend", e);
+					}
+				}
+				if (storedTokens && storedHost) {
+					try {
+						const response = await fetch("/auth/restore-session", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								host: storedHost,
+								tokens: JSON.parse(storedTokens),
+							}),
+						});
+						if (response.ok) {
+							appendLog(`[SYSTEM] Kitsu 세션이 성공적으로 복구되었습니다.`);
+						} else {
+							appendLog(`[WARNING] Kitsu 세션 복구 실패. 퍼블리쉬 과정 중 오류가 발생할 수 있습니다.`);
+						}
+					} catch (restoreErr: any) {
+						appendLog(`[WARNING] Kitsu 세션 복구 요청 중 통신 오류 발생: ${restoreErr.message}`);
+					}
+				}
+			}
+
+			// 3단계: Kitsu 퍼블리쉬 단계 (일괄 처리)
+			appendLog(`[PUBLISH] Kitsu 퍼블리쉬를 시작합니다.`);
+			for (let i = 0; i < displayGroups.length; i++) {
+				const group = displayGroups[i];
+				if (!group.selected || !group.task_id) continue;
+
+				// FTP 복사를 사용하는 환경인데, FTP 전송에 실패한 항목이라면 퍼블리쉬를 건너뜀
+				if (ftpConfig && !ftpSuccessfulItems.has(group.file_path)) {
+					appendLog(`[PUBLISH 건너뜀] FTP 전송 실패로 인해 Kitsu 등록 생략: ${group.filename}`);
+					continue;
+				}
+
+				const itemIndex = itemsToPublish.indexOf(group);
+				const itemNum = itemIndex + 1;
+
 				displayGroups[i] = { ...displayGroups[i], publish_status: "uploading" };
 				appendLog(`[PUBLISH] ${itemNum}/${itemsToPublish.length}: ${group.filename}`);
 
