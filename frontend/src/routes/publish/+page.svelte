@@ -18,6 +18,14 @@
 	let ftpTreeOpen = $state(false);
 	let ftpDestPath = $state("/");
 	let transferring = $state(false);
+	let ftpProgress = $state({
+		active: false,
+		uploaded: 0,
+		total: 0,
+		currentFile: "",
+		completedShots: 0,
+		totalShots: 0,
+	});
 
 	let directoryPath = $state("");
 	let displayGroups = $state<any[]>([]); // UI에 표시될 그룹화된 데이터
@@ -467,49 +475,127 @@
 		});
 	}
 
-	async function ftpTransferItem(group: any): Promise<boolean> {
-		const items = [];
+	async function executeFtpTransferStream(itemsToPublish: any[]): Promise<Set<string>> {
+		const successShots = new Set<string>();
+		const shotErrors = new Map<string, string>();
 
-		// MOV file
-		items.push({
-			local_path: group.file_path,
-			is_dir: false,
-			remote_name: group.filename,
-		});
-
-		// EXR/DPX sequence folder (if found)
-		if (group.sequence_folder) {
-			const folderName = group.sequence_folder.split("/").pop() || group.sequence_folder.split("\\").pop();
-			items.push({
-				local_path: group.sequence_folder,
-				is_dir: true,
-				remote_name: folderName,
+		// 전송할 아이템 목록 구성 (group_key = group.file_path 로 그룹 식별)
+		const allItems: any[] = [];
+		for (const group of itemsToPublish) {
+			// MOV 파일
+			allItems.push({
+				local_path: group.file_path,
+				is_dir: false,
+				remote_name: group.filename,
+				group_key: group.file_path,
 			});
+			// EXR/DPX 시퀀스 폴더
+			if (group.sequence_folder) {
+				const folderName = group.sequence_folder.split("/").pop() || group.sequence_folder.split("\\").pop();
+				allItems.push({
+					local_path: group.sequence_folder,
+					is_dir: true,
+					remote_name: folderName,
+					group_key: group.file_path,
+				});
+			}
 		}
 
-		appendLog(`[FTP] Transferring ${group.filename}${group.sequence_folder ? " + sequence folder" : ""}...`);
-
-		const res = await fetch("/ftp/transfer", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				config: ftpConfig,
-				remote_dest: ftpDestPath,
-				items,
-			}),
-		});
-
-		if (!res.ok) {
-			const data = await res.json();
-			throw new Error(data.detail || "FTP transfer failed");
+		// 모든 선택 그룹을 ftp_uploading 상태로 초기화
+		for (let i = 0; i < displayGroups.length; i++) {
+			if (displayGroups[i].selected && displayGroups[i].task_id) {
+				displayGroups[i] = { ...displayGroups[i], publish_status: "ftp_uploading" };
+			}
 		}
 
-		const results = await res.json();
-		const failed = results.filter((r: any) => r.status === "error");
-		if (failed.length > 0) {
-			throw new Error(failed[0].message || "Transfer error");
+		ftpProgress = {
+			active: true,
+			uploaded: 0,
+			total: 0,
+			currentFile: "",
+			completedShots: 0,
+			totalShots: itemsToPublish.length,
+		};
+
+		appendLog(`[FTP] Starting transfer for ${itemsToPublish.length} item(s).`);
+
+		try {
+			const res = await fetch("/ftp/transfer-stream", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					config: ftpConfig,
+					remote_dest: ftpDestPath,
+					items: allItems,
+				}),
+			});
+
+			if (!res.ok) {
+				const data = await res.json();
+				throw new Error(data.detail || "FTP connection failed");
+			}
+
+			const reader = res.body!.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+
+				for (const line of lines) {
+					if (!line.startsWith("data: ")) continue;
+					const event = JSON.parse(line.slice(6));
+
+					if (event.type === "file_done") {
+						ftpProgress.uploaded = event.uploaded;
+						ftpProgress.total = event.total;
+						ftpProgress.currentFile = event.name;
+
+					} else if (event.type === "item_start") {
+						ftpProgress.currentFile = event.name;
+
+					} else if (event.type === "item_done") {
+						const key = event.group_key;
+						if (event.status === "error") {
+							shotErrors.set(key, event.message);
+							// group_key === local_path 인 경우 = MOV 파일 → 그룹 에러 확정
+							if (event.local_path === key) {
+								for (let i = 0; i < displayGroups.length; i++) {
+									if (displayGroups[i].file_path === key) {
+										displayGroups[i] = {
+											...displayGroups[i],
+											publish_status: "error",
+											error_message: `FTP: ${event.message}`,
+										};
+										publishResults.failed++;
+										appendLog(`[FTP ERROR] ${displayGroups[i].filename}: ${event.message}`);
+									}
+								}
+							}
+						} else if (event.status === "success" && event.local_path === key) {
+							// MOV 파일 전송 완료 = 해당 샷 전송 완료
+							if (!shotErrors.has(key)) {
+								successShots.add(key);
+								ftpProgress.completedShots = successShots.size;
+								appendLog(`[FTP] Done: ${event.name}`);
+							}
+						}
+
+					} else if (event.type === "error") {
+						throw new Error(event.message);
+					}
+				}
+			}
+		} finally {
+			ftpProgress = { ...ftpProgress, active: false };
 		}
-		return true;
+
+		appendLog(`[FTP] Transfer complete. Success: ${successShots.size}/${itemsToPublish.length}`);
+		return successShots;
 	}
 
 	async function handlePublish() {
@@ -540,41 +626,17 @@
 		error = "";
 		publishResults = { success: 0, failed: 0 };
 
-		const ftpSuccessfulItems = new Set<string>();
+		let ftpSuccessfulItems = new Set<string>();
 
 		try {
-			// 1단계: FTP 전송 단계 (일괄 처리)
+			// 1단계: FTP 스트리밍 전송
 			if (ftpConfig) {
-				appendLog(`[FTP] ${itemsToPublish.length}개 항목의 FTP 전송을 시작합니다.`);
-				for (let i = 0; i < displayGroups.length; i++) {
-					const group = displayGroups[i];
-					if (!group.selected || !group.task_id) continue;
-
-					const itemIndex = itemsToPublish.indexOf(group);
-					const itemNum = itemIndex + 1;
-
-					displayGroups[i] = { ...group, publish_status: "ftp_uploading" };
-					appendLog(`[FTP] ${itemNum}/${itemsToPublish.length}: ${group.filename}`);
-					try {
-						await ftpTransferItem(group);
-						appendLog(`[FTP] 완료: ${group.filename}`);
-						ftpSuccessfulItems.add(group.file_path);
-					} catch (ftpErr: any) {
-						displayGroups[i] = {
-							...displayGroups[i],
-							publish_status: "error",
-							error_message: `FTP: ${ftpErr.message}`,
-						};
-						publishResults.failed++;
-						appendLog(`[FTP 에러] ${group.filename}: ${ftpErr.message}`);
-					}
-				}
-				appendLog(`[FTP] 일괄 전송 프로세스가 완료되었습니다. (성공: ${ftpSuccessfulItems.size}개)`);
+				ftpSuccessfulItems = await executeFtpTransferStream(itemsToPublish);
 			}
 
 			// 2단계: Kitsu 세션 사전 자동 복구 (장시간 FTP 전송으로 인한 토큰 만료 방어)
 			if (ftpConfig && itemsToPublish.length > 0) {
-				appendLog(`[SYSTEM] Kitsu 세션 상태를 복구하고 재인증을 수행합니다...`);
+				appendLog(`[SYSTEM] Restoring Kitsu session...`);
 				let storedTokens = localStorage.getItem("kitsu_tokens");
 				let storedHost = localStorage.getItem("kitsu_host");
 				if (window.pywebview && window.pywebview.api && window.pywebview.api.get_session) {
@@ -599,25 +661,25 @@
 							}),
 						});
 						if (response.ok) {
-							appendLog(`[SYSTEM] Kitsu 세션이 성공적으로 복구되었습니다.`);
+							appendLog(`[SYSTEM] Kitsu session restored successfully.`);
 						} else {
-							appendLog(`[WARNING] Kitsu 세션 복구 실패. 퍼블리쉬 과정 중 오류가 발생할 수 있습니다.`);
+							appendLog(`[WARNING] Kitsu session restore failed. Publish may encounter errors.`);
 						}
 					} catch (restoreErr: any) {
-						appendLog(`[WARNING] Kitsu 세션 복구 요청 중 통신 오류 발생: ${restoreErr.message}`);
+						appendLog(`[WARNING] Session restore request failed: ${restoreErr.message}`);
 					}
 				}
 			}
 
 			// 3단계: Kitsu 퍼블리쉬 단계 (일괄 처리)
-			appendLog(`[PUBLISH] Kitsu 퍼블리쉬를 시작합니다.`);
+			appendLog(`[PUBLISH] Starting Kitsu publish...`);
 			for (let i = 0; i < displayGroups.length; i++) {
 				const group = displayGroups[i];
 				if (!group.selected || !group.task_id) continue;
 
 				// FTP 복사를 사용하는 환경인데, FTP 전송에 실패한 항목이라면 퍼블리쉬를 건너뜀
 				if (ftpConfig && !ftpSuccessfulItems.has(group.file_path)) {
-					appendLog(`[PUBLISH 건너뜀] FTP 전송 실패로 인해 Kitsu 등록 생략: ${group.filename}`);
+					appendLog(`[PUBLISH SKIPPED] FTP failed — skipping Kitsu publish: ${group.filename}`);
 					continue;
 				}
 
@@ -1391,34 +1453,69 @@
 					</div>
 				</section>
 
-				<div
-					class="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/80 backdrop-blur-lg border-t border-slate-800 shadow-2xl flex justify-center items-center gap-6 z-30"
-				>
-					<div class="text-sm text-slate-400 flex items-center gap-3">
-						Ready to publish <strong class="text-white text-base mx-1">{displayGroups.filter((g) => g.selected).length}</strong> shots
-						{#if ftpConfig}
-							<span class="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
-								<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
-								FTP {ftpConfig.protocol.toUpperCase()} ON
-							</span>
-						{/if}
-					</div>
-					<button
-						onclick={handlePublish}
-						disabled={publishing ||
-							displayGroups.filter((g) => g.selected).length === 0}
-						class="{ftpConfig ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transform active:scale-95"
-					>
-						{#if publishing}
-							<svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-							{transferring ? "Transferring..." : "Publishing..."}
-						{:else if ftpConfig}
-							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
-							Transfer + Publish
-						{:else}
-							🚀 Publish Now
-						{/if}
-					</button>
+				<div class="fixed bottom-0 left-0 right-0 bg-slate-900/90 backdrop-blur-lg border-t border-slate-800 shadow-2xl z-30">
+					{#if ftpProgress.active}
+						<!-- FTP transfer progress panel -->
+						<div class="px-6 pt-3 pb-1 max-w-3xl mx-auto">
+							<div class="flex items-center justify-between mb-1.5">
+								<div class="flex items-center gap-2">
+									<div class="animate-spin h-3.5 w-3.5 border-2 border-emerald-400 border-t-transparent rounded-full shrink-0"></div>
+									<span class="text-xs font-bold text-emerald-400 uppercase tracking-wider">FTP {ftpConfig?.protocol?.toUpperCase()} Transferring</span>
+								</div>
+								<span class="text-xs text-slate-400 font-mono">
+									Shot <strong class="text-white">{ftpProgress.completedShots}</strong> / {ftpProgress.totalShots}
+								</span>
+							</div>
+							<!-- file progress bar -->
+							<div class="relative h-1.5 bg-slate-800 rounded-full overflow-hidden mb-1.5">
+								<div
+									class="absolute inset-y-0 left-0 bg-emerald-500 rounded-full transition-all duration-200"
+									style="width: {ftpProgress.total > 0 ? Math.round((ftpProgress.uploaded / ftpProgress.total) * 100) : 0}%"
+								></div>
+							</div>
+							<div class="flex items-center justify-between">
+								<span class="text-[11px] text-slate-500 font-mono truncate max-w-[60%]" title={ftpProgress.currentFile}>
+									{ftpProgress.currentFile || "Preparing..."}
+								</span>
+								<span class="text-[11px] text-slate-500 font-mono shrink-0">
+									{#if ftpProgress.total > 0}
+										{ftpProgress.uploaded.toLocaleString()} / {ftpProgress.total.toLocaleString()} files
+										&nbsp;·&nbsp;{Math.round((ftpProgress.uploaded / ftpProgress.total) * 100)}%
+									{/if}
+								</span>
+							</div>
+						</div>
+						<div class="h-2"></div>
+					{:else}
+						<!-- default bottom bar -->
+						<div class="p-4 flex justify-center items-center gap-6">
+							<div class="text-sm text-slate-400 flex items-center gap-3">
+								Ready to publish <strong class="text-white text-base mx-1">{displayGroups.filter((g) => g.selected).length}</strong> shots
+								{#if ftpConfig}
+									<span class="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
+										<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
+										FTP {ftpConfig.protocol.toUpperCase()} ON
+									</span>
+								{/if}
+							</div>
+							<button
+								onclick={handlePublish}
+								disabled={publishing ||
+									displayGroups.filter((g) => g.selected).length === 0}
+								class="{ftpConfig ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transform active:scale-95"
+							>
+								{#if publishing}
+									<svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+									Publishing...
+								{:else if ftpConfig}
+									<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" /></svg>
+									Transfer + Publish
+								{:else}
+									🚀 Publish Now
+								{/if}
+							</button>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</main>

@@ -168,12 +168,18 @@
 
 	$effect(() => {
 		if (isOpen) {
+			document.body.style.overflow = "hidden";
 			const start = initialPath || "/";
 			selectedPath = start;
 			rootNodes = [];
 			error = "";
 			loadRoot();
+		} else {
+			document.body.style.overflow = "";
 		}
+		return () => {
+			document.body.style.overflow = "";
+		};
 	});
 </script>
 
@@ -261,7 +267,7 @@
 			{/if}
 
 			<!-- Tree content -->
-			<div class="flex-1 overflow-y-auto p-3 min-h-0 space-y-0.5">
+			<div class="flex-1 overflow-y-auto overscroll-contain p-3 min-h-0 space-y-0.5">
 				{#if loadingRoot}
 					<div class="flex items-center justify-center py-16">
 						<div class="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full"></div>

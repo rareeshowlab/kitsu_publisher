@@ -137,7 +137,19 @@ uv run backend/generate_icons.py
 
 소스 코드를 단일 실행 파일(`.app`)로 패키징하는 방법입니다.
 
-### 1. 프론트엔드 빌드
+### 빌드 스크립트 사용 (권장)
+
+루트 디렉토리의 `build.sh`를 실행하면 프론트엔드 빌드와 앱 패키징이 한 번에 진행됩니다.
+
+```bash
+./build.sh
+```
+
+---
+
+### 수동 빌드
+
+#### 1. 프론트엔드 빌드
 ```bash
 cd frontend
 bun install
@@ -145,7 +157,7 @@ bun run build
 cd ..
 ```
 
-### 2. 실행 파일 생성 (PyInstaller)
+#### 2. 실행 파일 생성 (PyInstaller)
 `backend/KitsuPublisher.spec` 파일을 사용하여 OS 및 버전에 맞는 실행 파일을 생성합니다.
 
 ```bash
@@ -153,7 +165,7 @@ cd backend
 uv run pyinstaller KitsuPublisher.spec
 ```
 
-### 3. 결과물 확인
+### 결과물 확인
 빌드가 완료되면 `backend/dist/` 폴더에 OS와 버전 정보가 포함된 이름으로 실행 파일이 생성됩니다.
 
 - **macOS**: `backend/dist/KitsuPublisher_macOS_vX.X.X.app`

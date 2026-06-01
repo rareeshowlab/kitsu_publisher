@@ -106,6 +106,7 @@ class FtpTransferItem(BaseModel):
     local_path: str
     is_dir: bool
     remote_name: str
+    group_key: Optional[str] = None  # 프론트엔드에서 그룹 식별용
 
 
 class FtpTransferRequest(BaseModel):

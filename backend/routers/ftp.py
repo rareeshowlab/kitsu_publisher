@@ -1,10 +1,13 @@
 import os
 import stat
+import json
+import asyncio
 import logging
 import ftplib
 import paramiko
 from typing import List
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from schemas import FtpConfigModel, FtpBrowseRequest, FtpEntry, FtpTransferRequest, FtpMkdirRequest
 
@@ -240,3 +243,118 @@ def transfer_files(request: FtpTransferRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     return results
+
+
+# ── 파일 목록 순회 헬퍼 ──────────────────────────────────────────────────────
+
+def _walk_files(folder: str):
+    """폴더 내 숨김 파일 제외 모든 파일 경로를 재귀 열거"""
+    for name in sorted(os.listdir(folder)):
+        if name.startswith("."):
+            continue
+        path = os.path.join(folder, name)
+        if os.path.isdir(path):
+            yield from _walk_files(path)
+        else:
+            yield path
+
+
+def _count_transferable_files(items) -> int:
+    total = 0
+    for item in items:
+        if item.is_dir:
+            total += sum(1 for _ in _walk_files(item.local_path))
+        else:
+            total += 1
+    return total
+
+
+# ── SSE 스트리밍 전송 엔드포인트 ─────────────────────────────────────────────
+
+@router.post("/transfer-stream")
+async def transfer_files_stream(request: FtpTransferRequest):
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def emit(data: dict):
+        loop.call_soon_threadsafe(queue.put_nowait, data)
+
+    def do_transfer():
+        total_files = _count_transferable_files(request.items)
+        uploaded = [0]
+
+        try:
+            if request.config.protocol == "sftp":
+                ssh, sftp = _get_sftp_client(request.config)
+                try:
+                    for item in request.items:
+                        remote_path = request.remote_dest.rstrip("/") + "/" + item.remote_name
+                        emit({"type": "item_start", "local_path": item.local_path, "name": item.remote_name, "group_key": item.group_key})
+                        try:
+                            if item.is_dir:
+                                for fpath in _walk_files(item.local_path):
+                                    rel = os.path.relpath(fpath, item.local_path).replace(os.sep, "/")
+                                    rpath = remote_path.rstrip("/") + "/" + rel
+                                    _sftp_makedirs(sftp, rpath.rsplit("/", 1)[0])
+                                    sftp.put(fpath, rpath)
+                                    uploaded[0] += 1
+                                    emit({"type": "file_done", "name": os.path.basename(fpath), "uploaded": uploaded[0], "total": total_files})
+                            else:
+                                _sftp_upload_file(sftp, item.local_path, remote_path)
+                                uploaded[0] += 1
+                                emit({"type": "file_done", "name": item.remote_name, "uploaded": uploaded[0], "total": total_files})
+                            emit({"type": "item_done", "local_path": item.local_path, "status": "success", "group_key": item.group_key})
+                        except Exception as e:
+                            logger.error(f"[SFTP] Failed {item.remote_name}: {e}")
+                            emit({"type": "item_done", "local_path": item.local_path, "status": "error", "message": str(e), "group_key": item.group_key})
+                finally:
+                    sftp.close()
+                    ssh.close()
+            else:
+                ftp = _get_ftp_client(request.config)
+                try:
+                    for item in request.items:
+                        remote_path = request.remote_dest.rstrip("/") + "/" + item.remote_name
+                        emit({"type": "item_start", "local_path": item.local_path, "name": item.remote_name, "group_key": item.group_key})
+                        try:
+                            if item.is_dir:
+                                _ftp_makedirs(ftp, remote_path)
+                                for fpath in _walk_files(item.local_path):
+                                    rel = os.path.relpath(fpath, item.local_path).replace(os.sep, "/")
+                                    rpath = remote_path.rstrip("/") + "/" + rel
+                                    _ftp_makedirs(ftp, rpath.rsplit("/", 1)[0])
+                                    with open(fpath, "rb") as f:
+                                        ftp.storbinary(f"STOR {rpath}", f)
+                                    uploaded[0] += 1
+                                    emit({"type": "file_done", "name": os.path.basename(fpath), "uploaded": uploaded[0], "total": total_files})
+                            else:
+                                _ftp_upload_file(ftp, item.local_path, remote_path)
+                                uploaded[0] += 1
+                                emit({"type": "file_done", "name": item.remote_name, "uploaded": uploaded[0], "total": total_files})
+                            emit({"type": "item_done", "local_path": item.local_path, "status": "success", "group_key": item.group_key})
+                        except Exception as e:
+                            logger.error(f"[FTP] Failed {item.remote_name}: {e}")
+                            emit({"type": "item_done", "local_path": item.local_path, "status": "error", "message": str(e), "group_key": item.group_key})
+                finally:
+                    ftp.quit()
+            emit({"type": "done"})
+        except Exception as e:
+            logger.error(f"[FTP] Connection error: {e}")
+            emit({"type": "error", "message": str(e)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    async def generate():
+        task = loop.run_in_executor(None, do_transfer)
+        while True:
+            item = await queue.get()
+            if item is None:
+                await task
+                return
+            yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
